@@ -1,12 +1,9 @@
 """
-Run this once to generate .streamlit/secrets.toml for local dev
-AND to print what to paste into Streamlit Cloud.
-
-Usage:
-    python generate_secrets.py
+Generates secrets.toml from creds.json.
+Run once:  python generate_secrets.py
 """
 
-import json, os, sys
+import json, os, sys, subprocess
 
 CREDS_PATHS = ["creds.json", "../creds.json"]
 
@@ -17,19 +14,19 @@ def find_creds():
     return None
 
 def v(value):
-    """Escape a value as a valid TOML string (JSON escaping is compatible)."""
-    return json.dumps(str(value))   # returns "value" with surrounding quotes + proper escaping
+    # json.dumps produces a properly-escaped TOML-compatible quoted string
+    return json.dumps(str(value))
 
 def main():
     path = find_creds()
     if not path:
-        print("ERROR: creds.json not found. Place it next to this script or one folder up.")
+        print("ERROR: creds.json not found.")
         sys.exit(1)
 
     with open(path) as f:
         c = json.load(f)
 
-    sheet_id = input("Paste your Google Sheet ID (from the URL): ").strip()
+    sheet_id = input("Paste your Google Sheet ID (from the sheet URL): ").strip()
     if not sheet_id:
         print("ERROR: Sheet ID is required.")
         sys.exit(1)
@@ -49,17 +46,28 @@ def main():
         f"\nspreadsheet_id = {v(sheet_id)}\n"
     )
 
-    # Write local secrets.toml
+    # Write .streamlit/secrets.toml (for local dev)
     os.makedirs(".streamlit", exist_ok=True)
-    secrets_path = os.path.join(".streamlit", "secrets.toml")
-    with open(secrets_path, "w") as f:
+    local_path = os.path.join(".streamlit", "secrets.toml")
+    with open(local_path, "w") as f:
         f.write(toml)
 
-    print(f"\n✓ Written to {secrets_path}")
-    print("\n" + "=" * 60)
-    print("STREAMLIT CLOUD — paste the following into the Secrets editor:")
-    print("=" * 60)
-    print(toml)
+    # Write a plain copy for Streamlit Cloud — open it in Notepad
+    cloud_path = os.path.abspath("streamlit_cloud_secrets.txt")
+    with open(cloud_path, "w") as f:
+        f.write(toml)
+
+    print(f"\n✓ Done!")
+    print(f"  Local dev  → {local_path}")
+    print(f"  Cloud copy → {cloud_path}  (opening in Notepad...)\n")
+    print("Copy everything from Notepad and paste into:")
+    print("Streamlit Cloud → App settings → Secrets → Save\n")
+
+    # Open the file in Notepad so user can Ctrl+A, Ctrl+C
+    try:
+        subprocess.Popen(["notepad.exe", cloud_path])
+    except Exception:
+        print(f"(Open {cloud_path} manually and copy its contents)")
 
 if __name__ == "__main__":
     main()

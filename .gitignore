@@ -1,5 +1,6 @@
 .streamlit/secrets.toml
 creds.json
+streamlit_cloud_secrets.txt
 __pycache__/
 *.pyc
 *.pyo

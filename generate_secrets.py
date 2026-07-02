@@ -16,6 +16,10 @@ def find_creds():
             return p
     return None
 
+def v(value):
+    """Escape a value as a valid TOML string (JSON escaping is compatible)."""
+    return json.dumps(str(value))   # returns "value" with surrounding quotes + proper escaping
+
 def main():
     path = find_creds()
     if not path:
@@ -25,29 +29,25 @@ def main():
     with open(path) as f:
         c = json.load(f)
 
-    # Ask for spreadsheet ID
     sheet_id = input("Paste your Google Sheet ID (from the URL): ").strip()
     if not sheet_id:
         print("ERROR: Sheet ID is required.")
         sys.exit(1)
 
-    # Escape private key for TOML (replace literal \n with \\n for toml string)
-    private_key = c.get("private_key", "").replace("\n", "\\n")
-
-    toml = f'''[gcp_service_account]
-type                        = "{c.get('type', '')}"
-project_id                  = "{c.get('project_id', '')}"
-private_key_id              = "{c.get('private_key_id', '')}"
-private_key                 = "{private_key}"
-client_email                = "{c.get('client_email', '')}"
-client_id                   = "{c.get('client_id', '')}"
-auth_uri                    = "{c.get('auth_uri', '')}"
-token_uri                   = "{c.get('token_uri', '')}"
-auth_provider_x509_cert_url = "{c.get('auth_provider_x509_cert_url', '')}"
-client_x509_cert_url        = "{c.get('client_x509_cert_url', '')}"
-
-spreadsheet_id = "{sheet_id}"
-'''
+    toml = (
+        "[gcp_service_account]\n"
+        f"type                        = {v(c.get('type', ''))}\n"
+        f"project_id                  = {v(c.get('project_id', ''))}\n"
+        f"private_key_id              = {v(c.get('private_key_id', ''))}\n"
+        f"private_key                 = {v(c.get('private_key', ''))}\n"
+        f"client_email                = {v(c.get('client_email', ''))}\n"
+        f"client_id                   = {v(c.get('client_id', ''))}\n"
+        f"auth_uri                    = {v(c.get('auth_uri', ''))}\n"
+        f"token_uri                   = {v(c.get('token_uri', ''))}\n"
+        f"auth_provider_x509_cert_url = {v(c.get('auth_provider_x509_cert_url', ''))}\n"
+        f"client_x509_cert_url        = {v(c.get('client_x509_cert_url', ''))}\n"
+        f"\nspreadsheet_id = {v(sheet_id)}\n"
+    )
 
     # Write local secrets.toml
     os.makedirs(".streamlit", exist_ok=True)
@@ -56,9 +56,9 @@ spreadsheet_id = "{sheet_id}"
         f.write(toml)
 
     print(f"\n✓ Written to {secrets_path}")
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("STREAMLIT CLOUD — paste the following into the Secrets editor:")
-    print("="*60)
+    print("=" * 60)
     print(toml)
 
 if __name__ == "__main__":

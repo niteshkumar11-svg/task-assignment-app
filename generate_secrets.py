@@ -31,7 +31,11 @@ def main():
         print("ERROR: Sheet ID is required.")
         sys.exit(1)
 
+    # spreadsheet_id MUST come before [gcp_service_account] section —
+    # in TOML every key after a [section] header belongs to that section.
     toml = (
+        f"spreadsheet_id = {v(sheet_id)}\n"
+        "\n"
         "[gcp_service_account]\n"
         f"type                        = {v(c.get('type', ''))}\n"
         f"project_id                  = {v(c.get('project_id', ''))}\n"
@@ -43,7 +47,6 @@ def main():
         f"token_uri                   = {v(c.get('token_uri', ''))}\n"
         f"auth_provider_x509_cert_url = {v(c.get('auth_provider_x509_cert_url', ''))}\n"
         f"client_x509_cert_url        = {v(c.get('client_x509_cert_url', ''))}\n"
-        f"\nspreadsheet_id = {v(sheet_id)}\n"
     )
 
     # Write .streamlit/secrets.toml (for local dev)

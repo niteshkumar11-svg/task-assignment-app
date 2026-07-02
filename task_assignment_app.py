@@ -1,14 +1,14 @@
 """
 TaskFlow — Team Task Manager
 Streamlit + Google Sheets
-Roles: owner > admin > user  |  One active session per account
+Roles: owner > admin > user  |  Password auth  |  One active session per account
 """
 
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime, date, timedelta
-import uuid, base64, threading
+import uuid, base64, threading, hashlib
 from io import BytesIO
 
 try:
@@ -20,8 +20,8 @@ except ImportError:
 # ── CONSTANTS ──────────────────────────────────────────────────────────────────
 OWNER_EMAIL     = "nitesh.kumar11@flipkart.com"
 ALLOWED_DOMAIN  = "flipkart.com"
-SESSION_TTL_MIN = 60    # session expires after 60 min of inactivity
-PING_EVERY_S    = 300   # ping the sheet every 5 min max
+SESSION_TTL_MIN = 60
+PING_EVERY_S    = 300
 
 TASK_HEADERS = [
     "ID", "Title", "Description",
@@ -50,46 +50,41 @@ st.markdown("""
     padding-bottom: 4rem !important;
 }
 
-/* brand */
-.tf-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 2px; }
+.tf-brand { display:flex; align-items:center; gap:10px; margin-bottom:2px; }
 .tf-logo {
-    width: 38px; height: 38px; background: #2563EB; border-radius: 10px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 20px; flex-shrink: 0;
+    width:38px; height:38px; background:#2563EB; border-radius:10px;
+    display:flex; align-items:center; justify-content:center;
+    font-size:20px; flex-shrink:0;
 }
-.tf-brand-name { font-size: 22px; font-weight: 700; color: #0F172A; letter-spacing: -.3px; }
+.tf-brand-name { font-size:22px; font-weight:700; color:#0F172A; letter-spacing:-.3px; }
 
-/* login card */
 .tf-login {
-    background: white; border-radius: 16px;
-    padding: 36px 32px 20px; border: 1.5px solid #E2E8F0;
-    box-shadow: 0 8px 32px rgba(0,0,0,.09);
-    margin-top: 8px; margin-bottom: 8px;
+    background:white; border-radius:16px;
+    padding:36px 32px 24px; border:1.5px solid #E2E8F0;
+    box-shadow:0 8px 32px rgba(0,0,0,.09);
+    margin-top:8px; margin-bottom:8px;
 }
-.tf-login-h   { font-size: 20px; font-weight: 700; color: #0F172A; margin: 20px 0 4px; }
-.tf-login-sub { font-size: 13px; color: #64748B; margin-bottom: 4px; }
+.tf-login-h   { font-size:20px; font-weight:700; color:#0F172A; margin:20px 0 4px; }
+.tf-login-sub { font-size:13px; color:#64748B; margin-bottom:4px; }
+.tf-who { font-size:13px; color:#1D4ED8; font-weight:600; background:#EFF6FF;
+          border-radius:8px; padding:6px 12px; margin-bottom:16px; display:inline-block; }
 
-/* role badges */
 .tf-role-owner { background:#7C3AED;color:white;padding:2px 9px;border-radius:8px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em; }
 .tf-role-admin { background:#0F766E;color:white;padding:2px 9px;border-radius:8px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em; }
 .tf-role-user  { background:#475569;color:white;padding:2px 9px;border-radius:8px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em; }
 
-/* task card */
 .tf-card {
-    border: 1.5px solid #E2E8F0; border-radius: 12px;
-    padding: 16px 18px 14px; margin-bottom: 4px; background: white;
-    border-left-width: 4px;
+    border:1.5px solid #E2E8F0; border-radius:12px;
+    padding:16px 18px 14px; margin-bottom:4px; background:white;
+    border-left-width:4px;
 }
-.tf-card-pending   { border-left-color: #2563EB; }
-.tf-card-overdue   { border-left-color: #DC2626; }
-.tf-card-completed { border-left-color: #059669; }
+.tf-card-pending   { border-left-color:#2563EB; }
+.tf-card-overdue   { border-left-color:#DC2626; }
+.tf-card-completed { border-left-color:#059669; }
 
-.tf-card-top {
-    display: flex; justify-content: space-between;
-    align-items: flex-start; gap: 12px; margin-bottom: 8px;
-}
-.tf-card-title { font-size: 15px; font-weight: 600; color: #0F172A; line-height: 1.4; word-break: break-word; }
-.tf-card-title.done { text-decoration: line-through; color: #94A3B8; }
+.tf-card-top { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:8px; }
+.tf-card-title { font-size:15px; font-weight:600; color:#0F172A; line-height:1.4; word-break:break-word; }
+.tf-card-title.done { text-decoration:line-through; color:#94A3B8; }
 
 .tf-pill { flex-shrink:0; padding:3px 10px; border-radius:12px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; white-space:nowrap; }
 .tf-pill-pending   { background:#EFF6FF; color:#2563EB; }
@@ -100,10 +95,8 @@ st.markdown("""
 .tf-desc { font-size:13px; color:#475569; line-height:1.6; border-top:1px solid #F1F5F9; padding-top:8px; margin-top:2px; }
 .tf-assignee-tag { display:inline-block; background:#EFF6FF; color:#1D4ED8; border-radius:8px; padding:2px 10px; font-size:12px; font-weight:600; margin-bottom:7px; }
 
-/* online dot */
 .tf-online { display:inline-block; width:8px; height:8px; background:#10B981; border-radius:50%; margin-right:5px; }
 
-/* filter radio */
 div[data-testid="stHorizontalBlock"] .stRadio > label { display:none; }
 .stRadio [role=radiogroup] { flex-direction:row !important; gap:8px !important; flex-wrap:wrap; }
 .stRadio label div[data-testid="stMarkdownContainer"] p { font-size:12px !important; font-weight:500 !important; }
@@ -111,7 +104,7 @@ div[data-testid="stHorizontalBlock"] .stRadio > label { display:none; }
 """, unsafe_allow_html=True)
 
 
-# ── UNIQUE BROWSER-SESSION TOKEN ───────────────────────────────────────────────
+# ── BROWSER-SESSION TOKEN ──────────────────────────────────────────────────────
 if "session_token" not in st.session_state:
     st.session_state.session_token = str(uuid.uuid4())
 
@@ -149,23 +142,74 @@ def get_ws(name: str):
         raise
 
 
-# ── SESSION MANAGEMENT ─────────────────────────────────────────────────────────
-def _session_age_min(last_seen_str: str) -> float:
+# ── PASSWORD HELPERS ───────────────────────────────────────────────────────────
+def _pw_hash(email: str, password: str) -> str:
+    data = f"taskflow::{email.strip().lower()}::{password}"
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()
+
+
+def _pw_col(ws) -> int:
+    """Return 1-based column index for Password, creating the header if absent."""
+    headers = ws.row_values(1)
+    if "Password" in headers:
+        return headers.index("Password") + 1
+    col = len(headers) + 1
+    ws.update_cell(1, col, "Password")
+    return col
+
+
+def get_pw_hash(email: str) -> str:
+    """Read the stored password hash directly (no cache — must be fresh)."""
     try:
-        dt = datetime.fromisoformat(str(last_seen_str).strip())
-        return (datetime.now() - dt).total_seconds() / 60
+        rows = get_ws("Users").get_all_records()
+        for r in rows:
+            if str(r.get("Email", "")).strip().lower() == email.lower():
+                return str(r.get("Password", "")).strip()
+    except Exception:
+        pass
+    return ""
+
+
+def set_pw(email: str, password: str):
+    """Write password hash to the Users sheet."""
+    ws  = get_ws("Users")
+    col = _pw_col(ws)
+    try:
+        cell = ws.find(email.strip().lower())
+        ws.update_cell(cell.row, col, _pw_hash(email, password))
+    except Exception:
+        pass
+
+
+def verify_pw(email: str, password: str) -> bool:
+    stored = get_pw_hash(email)
+    return bool(stored) and stored == _pw_hash(email, password)
+
+
+def reset_pw(email: str):
+    """Clear stored password so user must set a new one on next login."""
+    ws  = get_ws("Users")
+    col = _pw_col(ws)
+    try:
+        cell = ws.find(email.strip().lower())
+        ws.update_cell(cell.row, col, "")
+    except Exception:
+        pass
+
+
+# ── SESSION MANAGEMENT ─────────────────────────────────────────────────────────
+def _session_age_min(s: str) -> float:
+    try:
+        return (datetime.now() - datetime.fromisoformat(str(s).strip())).total_seconds() / 60
     except Exception:
         return 9999.0
 
 
 def check_session(email: str) -> tuple[bool, str]:
-    """Returns (is_active, existing_token). Active = last seen within SESSION_TTL_MIN."""
     try:
-        rows = get_ws("Sessions").get_all_records()
-        for r in rows:
+        for r in get_ws("Sessions").get_all_records():
             if str(r.get("Email", "")).strip() == email:
-                age = _session_age_min(r.get("LastSeen", ""))
-                if age < SESSION_TTL_MIN:
+                if _session_age_min(r.get("LastSeen", "")) < SESSION_TTL_MIN:
                     return True, str(r.get("SessionToken", "")).strip()
     except Exception:
         pass
@@ -173,30 +217,26 @@ def check_session(email: str) -> tuple[bool, str]:
 
 
 def write_session(email: str, token: str):
-    ws      = get_ws("Sessions")
-    now_str = datetime.now().isoformat(timespec="seconds")
+    ws  = get_ws("Sessions")
+    now = datetime.now().isoformat(timespec="seconds")
     try:
         cell = ws.find(email)
-        row  = cell.row
-        ws.update(f"A{row}:D{row}", [[email, token, now_str, now_str]])
+        ws.update(f"A{cell.row}:D{cell.row}", [[email, token, now, now]])
     except Exception:
-        ws.append_row([email, token, now_str, now_str])
+        ws.append_row([email, token, now, now])
 
 
 def _ping_bg(email: str, token: str):
     try:
         ws   = get_ws("Sessions")
         cell = ws.find(email)
-        if cell:
-            row = ws.row_values(cell.row)
-            if len(row) > 1 and row[1] == token:
-                ws.update_cell(cell.row, 4, datetime.now().isoformat(timespec="seconds"))
+        if cell and ws.row_values(cell.row)[1] == token:
+            ws.update_cell(cell.row, 4, datetime.now().isoformat(timespec="seconds"))
     except Exception:
         pass
 
 
 def ping_session(email: str, token: str):
-    """Fire-and-forget: update LastSeen at most once per PING_EVERY_S seconds."""
     last = st.session_state.get("_last_ping")
     now  = datetime.now()
     if last and (now - last).total_seconds() < PING_EVERY_S:
@@ -216,7 +256,6 @@ def remove_session(email: str):
 
 
 def get_all_sessions() -> dict[str, dict]:
-    """Returns {email: {token, login_at, last_seen, age_min}} for active sessions."""
     result = {}
     try:
         for r in get_ws("Sessions").get_all_records():
@@ -228,7 +267,6 @@ def get_all_sessions() -> dict[str, dict]:
                 result[email] = {
                     "token":    str(r.get("SessionToken", "")),
                     "login_at": str(r.get("LoginAt", "")),
-                    "last_seen":str(r.get("LastSeen", "")),
                     "age_min":  round(age, 1),
                 }
     except Exception:
@@ -239,7 +277,6 @@ def get_all_sessions() -> dict[str, dict]:
 # ── USERS ──────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=30, show_spinner=False)
 def load_users() -> list[tuple[str, str, str]]:
-    """Returns [(email, name, role), ...]."""
     rows   = get_ws("Users").get_all_records()
     result = []
     for r in rows:
@@ -253,12 +290,12 @@ def load_users() -> list[tuple[str, str, str]]:
     return result
 
 
-def _ensure_role_col(ws) -> int:
+def _ensure_col(ws, header: str) -> int:
     headers = ws.row_values(1)
-    if "Role" in headers:
-        return headers.index("Role") + 1
+    if header in headers:
+        return headers.index(header) + 1
     col = len(headers) + 1
-    ws.update_cell(1, col, "Role")
+    ws.update_cell(1, col, header)
     return col
 
 
@@ -274,19 +311,23 @@ def add_user(email: str, name: str) -> tuple[bool, str]:
     if email in [u[0].lower() for u in load_users()]:
         return False, "This email is already registered."
     ws = get_ws("Users")
-    _ensure_role_col(ws)
-    ws.append_row([email, name, "user"], value_input_option="USER_ENTERED")
+    _ensure_col(ws, "Role")
+    _ensure_col(ws, "Password")
+    ws.append_row([email, name, "user", ""], value_input_option="USER_ENTERED")
     load_users.clear()
-    return True, f"{name} has been added to the system."
+    return True, f"{name} has been added. They will set their password on first sign in."
 
 
 def set_user_role(email: str, new_role: str):
-    ws       = get_ws("Users")
-    role_col = _ensure_role_col(ws)
-    cell     = ws.find(email)
-    if cell:
-        ws.update_cell(cell.row, role_col, new_role)
-        load_users.clear()
+    ws  = get_ws("Users")
+    col = _ensure_col(ws, "Role")
+    try:
+        cell = ws.find(email)
+        if cell:
+            ws.update_cell(cell.row, col, new_role)
+            load_users.clear()
+    except Exception:
+        pass
 
 
 # ── TASKS ──────────────────────────────────────────────────────────────────────
@@ -361,10 +402,12 @@ def fmt_date(s: str) -> str:
 
 # ── STREAMLIT SESSION DEFAULTS ─────────────────────────────────────────────────
 for _k, _v in [
-    ("logged_in",  False),
-    ("user_email", ""),
-    ("user_name",  ""),
-    ("user_role",  "user"),
+    ("logged_in",   False),
+    ("user_email",  ""),
+    ("user_name",   ""),
+    ("user_role",   "user"),
+    ("login_step",  "select"),   # select | password | set_password | conflict
+    ("login_email", ""),
 ]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
@@ -378,6 +421,23 @@ if st.session_state.logged_in:
 # ══════════════════════════════════════════════════════════════════════════════
 # LOGIN SCREEN
 # ══════════════════════════════════════════════════════════════════════════════
+def _finish_login(email: str, users: list):
+    """Set session state after successful auth and rerun."""
+    user_map   = {u[0]: (u[1], u[2]) for u in users}
+    name, role = user_map.get(email, (email, "user"))
+    if email == OWNER_EMAIL:
+        role = "owner"
+    st.session_state.update({
+        "logged_in":   True,
+        "user_email":  email,
+        "user_name":   name,
+        "user_role":   role,
+        "login_step":  "select",
+        "login_email": "",
+    })
+    st.rerun()
+
+
 if not st.session_state.logged_in:
     _, col, _ = st.columns([1, 3, 1])
     with col:
@@ -394,7 +454,7 @@ if not st.session_state.logged_in:
 
         login_tab, add_tab = st.tabs(["🔑  Sign In", "➕  Add User"])
 
-        # ── Sign In ───────────────────────────────────────────────────────────
+        # ══ SIGN IN TAB ═══════════════════════════════════════════════════════
         with login_tab:
             try:
                 users  = load_users()
@@ -403,66 +463,116 @@ if not st.session_state.logged_in:
                 st.error(f"Could not load team list: {e}")
                 users, emails = [], []
 
-            # ── Session conflict state ────────────────────────────────────────
-            conflict = st.session_state.get("login_conflict", "")
+            step = st.session_state.login_step
 
-            if conflict:
+            # ── STEP 1: select email ──────────────────────────────────────────
+            if step == "select":
+                sel = st.selectbox(
+                    "Your email",
+                    ["— Select your email —"] + emails,
+                    label_visibility="collapsed",
+                )
+                if st.button("Continue →", type="primary", use_container_width=True):
+                    if sel == "— Select your email —":
+                        st.error("Please select your email.")
+                    else:
+                        st.session_state.login_email = sel
+                        stored = get_pw_hash(sel)
+                        st.session_state.login_step = "set_password" if not stored else "password"
+                        st.rerun()
+
+            # ── STEP 2a: password not set — create one ────────────────────────
+            elif step == "set_password":
+                pending = st.session_state.login_email
+                st.markdown(
+                    f'<div class="tf-who">👤 {pending}</div>',
+                    unsafe_allow_html=True,
+                )
+                st.info("First sign in — please create your password for TaskFlow.")
+                pw1 = st.text_input("New password",     type="password", key="sp1",
+                                    placeholder="At least 6 characters")
+                pw2 = st.text_input("Confirm password", type="password", key="sp2",
+                                    placeholder="Repeat the password")
+                col_btn, col_back = st.columns([3, 1])
+                with col_btn:
+                    if st.button("Set Password & Sign In", type="primary", use_container_width=True):
+                        if len(pw1) < 6:
+                            st.error("Password must be at least 6 characters.")
+                        elif pw1 != pw2:
+                            st.error("Passwords do not match.")
+                        else:
+                            with st.spinner("Saving password…"):
+                                set_pw(pending, pw1)
+                            # Session check (owner skips)
+                            if pending != OWNER_EMAIL:
+                                active, old_tok = check_session(pending)
+                                if active and old_tok != MY_TOKEN:
+                                    st.session_state.login_step = "conflict"
+                                    st.rerun()
+                            write_session(pending, MY_TOKEN)
+                            _finish_login(pending, users)
+                with col_back:
+                    if st.button("← Back", use_container_width=True):
+                        st.session_state.login_step  = "select"
+                        st.session_state.login_email = ""
+                        st.rerun()
+
+            # ── STEP 2b: password set — verify ───────────────────────────────
+            elif step == "password":
+                pending = st.session_state.login_email
+                st.markdown(
+                    f'<div class="tf-who">👤 {pending}</div>',
+                    unsafe_allow_html=True,
+                )
+                pw = st.text_input("Password", type="password", key="lp",
+                                   placeholder="Enter your TaskFlow password")
+                col_btn, col_back = st.columns([3, 1])
+                with col_btn:
+                    if st.button("Sign In", type="primary", use_container_width=True):
+                        if not pw:
+                            st.error("Please enter your password.")
+                        elif not verify_pw(pending, pw):
+                            st.error("Incorrect password. Please try again.")
+                        else:
+                            # Session check (owner skips)
+                            if pending != OWNER_EMAIL:
+                                active, old_tok = check_session(pending)
+                                if active and old_tok != MY_TOKEN:
+                                    st.session_state.login_step = "conflict"
+                                    st.rerun()
+                            write_session(pending, MY_TOKEN)
+                            _finish_login(pending, users)
+                with col_back:
+                    if st.button("← Back", use_container_width=True):
+                        st.session_state.login_step  = "select"
+                        st.session_state.login_email = ""
+                        st.rerun()
+
+            # ── STEP 3: session conflict ──────────────────────────────────────
+            elif step == "conflict":
+                pending = st.session_state.login_email
+                st.markdown(
+                    f'<div class="tf-who">👤 {pending}</div>',
+                    unsafe_allow_html=True,
+                )
                 st.error(
-                    f"**{conflict}** is already signed in from another device or browser.\n\n"
-                    "If this is you, click **Force Sign In** to log out the other session."
+                    "**This account is already signed in from another device or browser.**\n\n"
+                    "Click **Force Sign In** to log out that session and sign in here."
                 )
                 fc1, fc2 = st.columns(2)
                 with fc1:
                     if st.button("Force Sign In", type="primary", use_container_width=True):
                         with st.spinner("Clearing other session…"):
-                            remove_session(conflict)
-                            write_session(conflict, MY_TOKEN)
-                        user_map     = {u[0]: (u[1], u[2]) for u in users}
-                        name, role   = user_map.get(conflict, (conflict, "user"))
-                        if conflict == OWNER_EMAIL:
-                            role = "owner"
-                        st.session_state.logged_in  = True
-                        st.session_state.user_email = conflict
-                        st.session_state.user_name  = name
-                        st.session_state.user_role  = role
-                        st.session_state.pop("login_conflict", None)
-                        st.rerun()
+                            remove_session(pending)
+                            write_session(pending, MY_TOKEN)
+                        _finish_login(pending, users)
                 with fc2:
                     if st.button("Cancel", use_container_width=True):
-                        st.session_state.pop("login_conflict", None)
+                        st.session_state.login_step  = "select"
+                        st.session_state.login_email = ""
                         st.rerun()
 
-            else:
-                sel = st.selectbox(
-                    "Email",
-                    ["— Select your email —"] + emails,
-                    label_visibility="collapsed",
-                )
-                if st.button("Sign In", type="primary", use_container_width=True):
-                    if sel == "— Select your email —":
-                        st.error("Please select your email.")
-                    else:
-                        # Owner bypasses session check; everyone else is verified
-                        if sel != OWNER_EMAIL:
-                            active, old_token = check_session(sel)
-                            if active and old_token != MY_TOKEN:
-                                st.session_state["login_conflict"] = sel
-                                st.rerun()
-
-                        # No conflict (or owner) — proceed
-                        with st.spinner("Signing in…"):
-                            write_session(sel, MY_TOKEN)
-                        user_map   = {u[0]: (u[1], u[2]) for u in users}
-                        name, role = user_map.get(sel, (sel, "user"))
-                        if sel == OWNER_EMAIL:
-                            role = "owner"
-                        st.session_state.logged_in  = True
-                        st.session_state.user_email = sel
-                        st.session_state.user_name  = name
-                        st.session_state.user_role  = role
-                        st.rerun()
-
-        # ── Add User ──────────────────────────────────────────────────────────
+        # ══ ADD USER TAB ══════════════════════════════════════════════════════
         with add_tab:
             st.caption(f"Only @{ALLOWED_DOMAIN} addresses can be registered.")
             new_email = st.text_input("Email ID",  placeholder=f"name@{ALLOWED_DOMAIN}", key="reg_email")
@@ -498,8 +608,14 @@ with left:
 with right:
     if st.button("Sign out", use_container_width=True):
         remove_session(st.session_state.user_email)
-        for k in ("logged_in", "user_email", "user_name", "user_role"):
-            st.session_state[k] = False if k == "logged_in" else ""
+        st.session_state.update({
+            "logged_in":   False,
+            "user_email":  "",
+            "user_name":   "",
+            "user_role":   "user",
+            "login_step":  "select",
+            "login_email": "",
+        })
         st.rerun()
 
 st.divider()
@@ -601,10 +717,10 @@ with tab_view:
         st.info("No tasks yet." if is_admin else "No tasks assigned to you yet.")
     else:
         if is_admin:
-            assignees     = sorted({t.get("AssignedToName", "") for t in visible if t.get("AssignedToName")})
-            chosen_person = st.selectbox("Show tasks for", ["Everyone"] + assignees, key="person_filter")
-            if chosen_person != "Everyone":
-                visible = [t for t in visible if t.get("AssignedToName") == chosen_person]
+            assignees = sorted({t.get("AssignedToName", "") for t in visible if t.get("AssignedToName")})
+            chosen    = st.selectbox("Show tasks for", ["Everyone"] + assignees, key="person_filter")
+            if chosen != "Everyone":
+                visible = [t for t in visible if t.get("AssignedToName") == chosen]
 
         counts = {s: sum(1 for t in visible if classify(t) == s)
                   for s in ("pending", "overdue", "completed")}
@@ -661,15 +777,14 @@ with tab_view:
                     if img_data:
                         st.image(img_data, use_container_width=True)
 
-                # ── Action row ────────────────────────────────────────────────
                 confirm_key = f"del_confirm_{tid}"
 
                 if st.session_state.get(confirm_key):
-                    # Deletion confirmation
                     st.warning("⚠️ Delete this task permanently?")
                     dc1, dc2 = st.columns(2)
                     with dc1:
-                        if st.button("Yes, Delete", key=f"del_yes_{tid}", type="primary", use_container_width=True):
+                        if st.button("Yes, Delete", key=f"del_yes_{tid}",
+                                     type="primary", use_container_width=True):
                             with st.spinner("Deleting…"):
                                 delete_task(tid)
                             st.session_state.pop(confirm_key, None)
@@ -681,35 +796,35 @@ with tab_view:
 
                 elif not done:
                     if is_admin:
-                        # Admin / Owner: complete + delete
                         _, done_col, del_col = st.columns([2, 2, 1])
                         with done_col:
-                            if st.button("✅ Mark Complete", key=f"done_{tid}", type="primary", use_container_width=True):
+                            if st.button("✅ Mark Complete", key=f"done_{tid}",
+                                         type="primary", use_container_width=True):
                                 with st.spinner("Updating…"):
                                     finish_task(tid)
                                 st.success("Marked as complete!")
                                 st.rerun()
                         with del_col:
-                            if st.button("🗑️", key=f"del_{tid}", use_container_width=True, help="Delete task"):
+                            if st.button("🗑️", key=f"del_{tid}",
+                                         use_container_width=True, help="Delete task"):
                                 st.session_state[confirm_key] = True
                                 st.rerun()
                     else:
-                        # Regular user: complete only
                         _, btn_col = st.columns([3, 1])
                         with btn_col:
-                            if st.button("✅ Mark Complete", key=f"done_{tid}", type="primary", use_container_width=True):
+                            if st.button("✅ Mark Complete", key=f"done_{tid}",
+                                         type="primary", use_container_width=True):
                                 with st.spinner("Updating…"):
                                     finish_task(tid)
                                 st.success("Marked as complete!")
                                 st.rerun()
-
                 else:
                     done_at = str(task.get("CompletedAt", ""))[:10]
-                    # Admin/Owner: completed tasks can still be deleted
                     if is_admin:
                         _, del_col = st.columns([4, 1])
                         with del_col:
-                            if st.button("🗑️", key=f"del_{tid}", use_container_width=True, help="Delete task"):
+                            if st.button("🗑️", key=f"del_{tid}",
+                                         use_container_width=True, help="Delete task"):
                                 st.session_state[confirm_key] = True
                                 st.rerun()
                     st.caption(f"✓ Completed{' · ' + done_at if done_at else ''}")
@@ -724,12 +839,11 @@ if is_owner and tab_manage is not None:
     with tab_manage:
         st.subheader("Manage Users", divider="blue")
 
-        mu_tab1, mu_tab2 = st.tabs(["👥  Users & Roles", "🔌  Active Sessions"])
+        mu1, mu2 = st.tabs(["👥  Users & Roles", "🔌  Active Sessions"])
 
         # ── Users & Roles ─────────────────────────────────────────────────────
-        with mu_tab1:
-            st.caption("Promote users to Admin (can see all tasks). Only you can change roles.")
-
+        with mu1:
+            st.caption("Promote users to Admin or reset their password.")
             try:
                 all_users = load_users()
             except Exception as e:
@@ -737,10 +851,10 @@ if is_owner and tab_manage is not None:
                 all_users = []
 
             if not all_users:
-                st.info("No users found in the sheet.")
+                st.info("No users found.")
             else:
                 for u_email, u_name, u_role in all_users:
-                    c1, c2, c3, c4 = st.columns([3, 2, 2, 1])
+                    c1, c2, c3, c4, c5 = st.columns([3, 2, 2, 1, 1])
                     with c1:
                         st.markdown(f"**{u_name}**  \n`{u_email}`")
                     with c2:
@@ -759,26 +873,34 @@ if is_owner and tab_manage is not None:
                     with c4:
                         if u_email != OWNER_EMAIL:
                             if st.button("Save", key=f"save_{u_email}"):
-                                with st.spinner("Saving…"):
+                                with st.spinner("…"):
                                     set_user_role(u_email, new_role)
-                                st.success(f"Updated {u_name} → {new_role}")
+                                st.success(f"Updated → {new_role}")
                                 st.rerun()
+                    with c5:
+                        if st.button("Reset PW", key=f"rpw_{u_email}",
+                                     help="Force user to set a new password on next login"):
+                            with st.spinner("…"):
+                                reset_pw(u_email)
+                            st.success(f"Password reset for {u_name}.")
+                            st.rerun()
+
                     st.divider()
 
         # ── Active Sessions ───────────────────────────────────────────────────
-        with mu_tab2:
+        with mu2:
             st.caption("Users with an active session in the last 60 minutes.")
-            if st.button("↺ Refresh sessions", key="refresh_sess"):
+            if st.button("↺ Refresh", key="refresh_sess"):
                 st.rerun()
 
             sessions = get_all_sessions()
             if not sessions:
                 st.info("No active sessions right now.")
             else:
+                user_name_map = {u[0]: u[1] for u in load_users()}
                 for s_email, info in sessions.items():
-                    user_map  = {u[0]: u[1] for u in load_users()}
-                    s_name    = user_map.get(s_email, s_email)
-                    is_me     = (s_email == st.session_state.user_email)
+                    s_name    = user_name_map.get(s_email, s_email)
+                    is_me     = s_email == st.session_state.user_email
                     age_label = f"{int(info['age_min'])} min ago" if info['age_min'] >= 1 else "just now"
 
                     sc1, sc2 = st.columns([4, 1])
@@ -792,9 +914,9 @@ if is_owner and tab_manage is not None:
                         )
                     with sc2:
                         if not is_me:
-                            if st.button("Sign out", key=f"kick_{s_email}", help=f"Force sign out {s_name}"):
+                            if st.button("Sign out", key=f"kick_{s_email}"):
                                 with st.spinner(f"Signing out {s_name}…"):
                                     remove_session(s_email)
-                                st.success(f"{s_name} has been signed out.")
+                                st.success(f"{s_name} signed out.")
                                 st.rerun()
                     st.divider()

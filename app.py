@@ -113,48 +113,18 @@ TASK_HEADERS = [
 ]
 
 
-def _creds_path() -> str | None:
-    """Return path to creds.json if it exists locally (local dev only)."""
-    import os
-    for p in ["creds.json", "../creds.json"]:
-        if os.path.exists(p):
-            return p
-    return None
-
-
 @st.cache_resource(show_spinner=False)
 def _gc():
-    path = _creds_path()
-    if path:
-        # Local development — use creds.json directly
-        creds = Credentials.from_service_account_file(
-            path,
-            scopes=["https://www.googleapis.com/auth/spreadsheets"],
-        )
-    else:
-        # Streamlit Cloud — use st.secrets
-        creds = Credentials.from_service_account_info(
-            st.secrets["gcp_service_account"],
-            scopes=["https://www.googleapis.com/auth/spreadsheets"],
-        )
+    creds = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"],
+        scopes=["https://www.googleapis.com/auth/spreadsheets"],
+    )
     return gspread.authorize(creds)
-
-
-def _sheet_id() -> str:
-    """Read spreadsheet_id from st.secrets or local .streamlit/secrets.toml."""
-    try:
-        return st.secrets["spreadsheet_id"]
-    except Exception:
-        raise RuntimeError(
-            "spreadsheet_id not found. "
-            "Add it to .streamlit/secrets.toml:\n\n"
-            '  spreadsheet_id = "your-sheet-id-here"'
-        )
 
 
 @st.cache_resource(show_spinner=False)
 def _ss():
-    return _gc().open_by_key(_sheet_id())
+    return _gc().open_by_key(st.secrets["spreadsheet_id"])
 
 
 def get_ws(name: str):

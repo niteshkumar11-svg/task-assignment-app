@@ -359,17 +359,34 @@ def delete_task(task_id: str):
 
 
 # ── PHOTO HELPERS ──────────────────────────────────────────────────────────────
+# Google Sheets hard cell limit is 50,000 chars; stay safely under it.
+_CELL_LIMIT = 40_000
+
 def encode_photo(f) -> str:
-    if not f:
+    """
+    Compress image progressively until base64 fits in a Sheets cell.
+    Returns "" if PIL is unavailable or image cannot be compressed enough.
+    """
+    if not f or not PIL_OK:
         return ""
     try:
-        if PIL_OK:
-            img = Image.open(f)
-            img.thumbnail((900, 700), Image.Resampling.LANCZOS)
+        img = Image.open(f).convert("RGB")
+        # Each pass tries a smaller size / lower quality
+        for max_px, quality in [
+            (500, 60),
+            (400, 50),
+            (320, 40),
+            (240, 32),
+            (160, 25),
+        ]:
+            thumb = img.copy()
+            thumb.thumbnail((max_px, max_px), Image.Resampling.LANCZOS)
             buf = BytesIO()
-            img.convert("RGB").save(buf, format="JPEG", quality=72)
-            return base64.b64encode(buf.getvalue()).decode()
-        return base64.b64encode(f.read()).decode()
+            thumb.save(buf, format="JPEG", quality=quality, optimize=True)
+            b64 = base64.b64encode(buf.getvalue()).decode()
+            if len(b64) <= _CELL_LIMIT:
+                return b64
+        return ""   # couldn't compress enough; skip silently
     except Exception:
         return ""
 
@@ -680,15 +697,24 @@ with tab_assign:
             for msg in errs: st.error(msg)
         else:
             with st.spinner("Saving task…"):
-                save_task([
-                    str(uuid.uuid4())[:8], title.strip(), desc.strip(),
-                    to_email, email_name.get(to_email, ""),
-                    st.session_state.user_email, st.session_state.user_name,
-                    str(deadline), "pending",
-                    datetime.now().isoformat(timespec="seconds"), "",
-                    encode_photo(photo),
-                ])
-            st.success(f"Task assigned to **{email_name.get(to_email, to_email)}**!")
+                photo_b64   = encode_photo(photo)
+                photo_skipped = photo is not None and not photo_b64
+                try:
+                    save_task([
+                        str(uuid.uuid4())[:8], title.strip(), desc.strip(),
+                        to_email, email_name.get(to_email, ""),
+                        st.session_state.user_email, st.session_state.user_name,
+                        str(deadline), "pending",
+                        datetime.now().isoformat(timespec="seconds"), "",
+                        photo_b64,
+                    ])
+                except Exception as e:
+                    st.error(f"Could not save task: {e}")
+                    st.stop()
+            assignee = email_name.get(to_email, to_email)
+            st.success(f"Task assigned to **{assignee}**!")
+            if photo_skipped:
+                st.warning("Photo was too large to store even after compression — task saved without it. Try a smaller image.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

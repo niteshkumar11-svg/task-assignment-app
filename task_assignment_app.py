@@ -698,7 +698,7 @@ with right:
 
 st.divider()
 
-# ── Tabs ──────────────────────────────────────────────────────────────────────
+# ── Tabs (vary by role) ───────────────────────────────────────────────────────
 if is_owner:
     tab_dash, tab_assign, tab_view, tab_manage = st.tabs([
         "🏠  Dashboard",
@@ -706,12 +706,20 @@ if is_owner:
         "📋  All Tasks",
         "⚙️  Manage Users",
     ])
-else:
+elif is_admin:
     tab_dash, tab_assign, tab_view = st.tabs([
         "🏠  Dashboard",
         "➕  Assign Task",
-        "📋  All Tasks" if is_admin else "📋  My Tasks",
+        "📋  All Tasks",
     ])
+    tab_manage = None
+else:
+    # Regular users: no Assign Task tab
+    tab_dash, tab_view = st.tabs([
+        "🏠  Dashboard",
+        "📋  My Tasks",
+    ])
+    tab_assign = None
     tab_manage = None
 
 
@@ -731,11 +739,12 @@ with tab_dash:
     name_map  = {u[0]: u[1] for u in dash_users}   # email → name
     all_names = sorted({u[1] for u in dash_users})  # unique display names
 
-    # ── User selector (admin/owner only) ──────────────────────────────────────
-    if is_admin and all_names:
+    # ── User selector — available to everyone ─────────────────────────────────
+    if all_names:
         sel_name = st.selectbox(
             "View stats for",
             ["All Users"] + all_names,
+            index=0,
             key="dash_person",
         )
         if sel_name == "All Users":
@@ -744,9 +753,8 @@ with tab_dash:
             filtered = [t for t in dash_tasks
                         if t.get("AssignedToName") == sel_name]
     else:
-        sel_name = st.session_state.user_name
-        filtered = [t for t in dash_tasks
-                    if t.get("AssignedTo") == st.session_state.user_email]
+        sel_name = "All Users"
+        filtered = dash_tasks
 
     st.write("")
 
@@ -792,8 +800,8 @@ with tab_dash:
         )
         st.write("")
 
-    # ── Per-user breakdown (admin/owner, All Users view) ──────────────────────
-    if is_admin and sel_name == "All Users" and dash_users:
+    # ── Per-user breakdown (all roles, All Users view) ───────────────────────
+    if sel_name == "All Users" and dash_users:
         st.markdown("#### Breakdown by Team Member")
 
         rows_html = ""
@@ -844,7 +852,7 @@ with tab_dash:
         else:
             st.info("No tasks assigned yet.")
 
-    # ── Upcoming / Recent tasks preview ──────────────────────────────────────
+    # ── Upcoming / pending tasks preview for selected person ─────────────────
     elif filtered:
         pending_tasks = [t for t in filtered if classify(t) in ("pending", "overdue")]
         pending_tasks.sort(key=lambda t: str(t.get("Deadline", "")))
@@ -852,27 +860,27 @@ with tab_dash:
         if pending_tasks:
             st.markdown(f"#### Upcoming Tasks ({len(pending_tasks)})")
             for t in pending_tasks[:5]:
-                cls    = classify(t)
-                owner_label = (f' · <span style="color:#64748B">→ {t.get("AssignedToName","")}</span>'
-                               if is_admin else "")
+                cls          = classify(t)
+                assignee_lbl = f' · <span style="color:#64748B">→ {t.get("AssignedToName","")}</span>'
                 st.markdown(
                     f'<div class="tf-card tf-card-{cls}" style="margin-bottom:8px">'
                     f'<div class="tf-card-top">'
                     f'<span class="tf-card-title">{t.get("Title","")}</span>'
                     f'<span class="tf-pill tf-pill-{cls}">{cls}</span>'
                     f'</div>'
-                    f'<div class="tf-meta">🕐 {fmt_date(str(t.get("Deadline","")))} {owner_label}</div>'
+                    f'<div class="tf-meta">🕐 {fmt_date(str(t.get("Deadline","")))} {assignee_lbl}</div>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
             if len(pending_tasks) > 5:
-                st.caption(f"+ {len(pending_tasks) - 5} more — see the Tasks tab for the full list.")
+                st.caption(f"+ {len(pending_tasks) - 5} more — see the My Tasks tab for the full list.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ASSIGN TAB
+# ASSIGN TAB  (admin / owner only — tab_assign is None for regular users)
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_assign:
+if tab_assign is not None:
+ with tab_assign:
     st.subheader("Assign a New Task", divider="blue")
 
     try:

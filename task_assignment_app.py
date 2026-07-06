@@ -100,6 +100,32 @@ st.markdown("""
 div[data-testid="stHorizontalBlock"] .stRadio > label { display:none; }
 .stRadio [role=radiogroup] { flex-direction:row !important; gap:8px !important; flex-wrap:wrap; }
 .stRadio label div[data-testid="stMarkdownContainer"] p { font-size:12px !important; font-weight:500 !important; }
+
+/* ── dashboard stat cards ── */
+.tf-stat {
+    background:white; border-radius:12px; border:1.5px solid #E2E8F0;
+    padding:16px 10px 14px; text-align:center;
+    box-shadow:0 2px 8px rgba(0,0,0,.04);
+}
+.tf-stat-val   { font-size:30px; font-weight:800; line-height:1.15; }
+.tf-stat-lbl   { font-size:10px; color:#64748B; font-weight:600;
+                 text-transform:uppercase; letter-spacing:.06em; margin-top:4px; }
+.tf-stat-blue  { color:#2563EB; }
+.tf-stat-amber { color:#D97706; }
+.tf-stat-red   { color:#DC2626; }
+.tf-stat-green { color:#059669; }
+.tf-stat-slate { color:#475569; }
+
+/* ── user breakdown table ── */
+.tf-table { width:100%; border-collapse:collapse; font-size:13px; }
+.tf-table th { background:#F8FAFC; color:#64748B; font-size:11px; font-weight:600;
+               text-transform:uppercase; letter-spacing:.05em;
+               padding:8px 10px; text-align:left; border-bottom:2px solid #E2E8F0; }
+.tf-table td { padding:10px 10px; border-bottom:1px solid #F1F5F9; color:#0F172A; vertical-align:middle; }
+.tf-table tr:last-child td { border-bottom:none; }
+.tf-table tr:hover td { background:#F8FAFC; }
+.tf-bar-wrap { background:#F1F5F9; border-radius:4px; height:7px; overflow:hidden; width:80px; display:inline-block; }
+.tf-bar-fill { height:100%; border-radius:4px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -417,6 +443,41 @@ def fmt_date(s: str) -> str:
         return str(s)
 
 
+def compute_stats(tasks: list[dict]) -> dict:
+    today = date.today()
+    pending = overdue = done_on_time = done_late = 0
+    for t in tasks:
+        status = str(t.get("Status", "")).lower()
+        dl_str = str(t.get("Deadline", ""))
+        ca_str = str(t.get("CompletedAt", "")).strip()
+        if status == "completed":
+            try:
+                dl = datetime.strptime(dl_str, "%Y-%m-%d").date()
+                ca = datetime.fromisoformat(ca_str).date() if ca_str else None
+                if ca is None or ca <= dl:
+                    done_on_time += 1
+                else:
+                    done_late += 1
+            except Exception:
+                done_on_time += 1
+        else:
+            try:
+                if datetime.strptime(dl_str, "%Y-%m-%d").date() < today:
+                    overdue += 1
+                else:
+                    pending += 1
+            except Exception:
+                pending += 1
+    return {
+        "total":        len(tasks),
+        "pending":      pending,
+        "overdue":      overdue,
+        "done_on_time": done_on_time,
+        "done_late":    done_late,
+        "done_total":   done_on_time + done_late,
+    }
+
+
 # ── STREAMLIT SESSION DEFAULTS ─────────────────────────────────────────────────
 for _k, _v in [
     ("logged_in",   False),
@@ -639,17 +700,173 @@ st.divider()
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 if is_owner:
-    tab_assign, tab_view, tab_manage = st.tabs([
+    tab_dash, tab_assign, tab_view, tab_manage = st.tabs([
+        "🏠  Dashboard",
         "➕  Assign Task",
         "📋  All Tasks",
         "⚙️  Manage Users",
     ])
 else:
-    tab_assign, tab_view = st.tabs([
+    tab_dash, tab_assign, tab_view = st.tabs([
+        "🏠  Dashboard",
         "➕  Assign Task",
         "📋  All Tasks" if is_admin else "📋  My Tasks",
     ])
     tab_manage = None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DASHBOARD TAB
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_dash:
+    st.subheader("Dashboard", divider="blue")
+
+    try:
+        dash_tasks = load_tasks()
+        dash_users = load_users()
+    except Exception as e:
+        st.error(f"Could not load data: {e}")
+        dash_tasks, dash_users = [], []
+
+    name_map  = {u[0]: u[1] for u in dash_users}   # email → name
+    all_names = sorted({u[1] for u in dash_users})  # unique display names
+
+    # ── User selector (admin/owner only) ──────────────────────────────────────
+    if is_admin and all_names:
+        sel_name = st.selectbox(
+            "View stats for",
+            ["All Users"] + all_names,
+            key="dash_person",
+        )
+        if sel_name == "All Users":
+            filtered = dash_tasks
+        else:
+            filtered = [t for t in dash_tasks
+                        if t.get("AssignedToName") == sel_name]
+    else:
+        sel_name = st.session_state.user_name
+        filtered = [t for t in dash_tasks
+                    if t.get("AssignedTo") == st.session_state.user_email]
+
+    st.write("")
+
+    # ── Stat cards ────────────────────────────────────────────────────────────
+    s = compute_stats(filtered)
+
+    on_time_pct = (
+        round(s["done_on_time"] / s["done_total"] * 100)
+        if s["done_total"] > 0 else 0
+    )
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    for col, val, lbl, cls in [
+        (c1, s["total"],        "Total Tasks",       "tf-stat-slate"),
+        (c2, s["pending"],      "Pending",            "tf-stat-blue"),
+        (c3, s["overdue"],      "Overdue",            "tf-stat-red"),
+        (c4, s["done_on_time"], "Completed On Time",  "tf-stat-green"),
+        (c5, s["done_late"],    "Completed Late",     "tf-stat-amber"),
+    ]:
+        with col:
+            st.markdown(
+                f'<div class="tf-stat">'
+                f'<div class="tf-stat-val {cls}">{val}</div>'
+                f'<div class="tf-stat-lbl">{lbl}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+    st.write("")
+
+    # ── On-time rate bar ──────────────────────────────────────────────────────
+    if s["done_total"] > 0:
+        bar_color = "#059669" if on_time_pct >= 70 else "#D97706" if on_time_pct >= 40 else "#DC2626"
+        st.markdown(
+            f'<div style="font-size:13px;color:#475569;margin-bottom:6px;">'
+            f'On-time completion rate: '
+            f'<strong style="color:{bar_color}">{on_time_pct}%</strong>'
+            f' &nbsp;({s["done_on_time"]} of {s["done_total"]} completed tasks)</div>'
+            f'<div style="background:#F1F5F9;border-radius:6px;height:10px;overflow:hidden;">'
+            f'<div style="background:{bar_color};width:{on_time_pct}%;height:100%;'
+            f'border-radius:6px;transition:width .3s;"></div></div>',
+            unsafe_allow_html=True,
+        )
+        st.write("")
+
+    # ── Per-user breakdown (admin/owner, All Users view) ──────────────────────
+    if is_admin and sel_name == "All Users" and dash_users:
+        st.markdown("#### Breakdown by Team Member")
+
+        rows_html = ""
+        for u_email, u_name, _ in sorted(dash_users, key=lambda u: u[1]):
+            u_tasks = [t for t in dash_tasks if t.get("AssignedTo") == u_email]
+            if not u_tasks:
+                continue
+            us = compute_stats(u_tasks)
+            pct = round(us["done_on_time"] / us["done_total"] * 100) if us["done_total"] > 0 else 0
+            bar_col = "#059669" if pct >= 70 else "#D97706" if pct >= 40 else "#DC2626"
+            bar_w   = pct
+            pct_cell = (
+                f'<span style="font-size:12px;color:{bar_col};font-weight:700">{pct}%</span>'
+                f'&nbsp;<div class="tf-bar-wrap">'
+                f'<div class="tf-bar-fill" style="width:{bar_w}%;background:{bar_col}"></div>'
+                f'</div>'
+                if us["done_total"] > 0 else
+                f'<span style="color:#94A3B8;font-size:12px;">—</span>'
+            )
+            rows_html += (
+                f"<tr>"
+                f"<td><strong>{u_name}</strong></td>"
+                f"<td style='text-align:center'>{us['total']}</td>"
+                f"<td style='text-align:center;color:#2563EB'>{us['pending']}</td>"
+                f"<td style='text-align:center;color:#DC2626'>{us['overdue']}</td>"
+                f"<td style='text-align:center;color:#059669'>{us['done_on_time']}</td>"
+                f"<td style='text-align:center;color:#D97706'>{us['done_late']}</td>"
+                f"<td>{pct_cell}</td>"
+                f"</tr>"
+            )
+
+        if rows_html:
+            st.markdown(
+                f'<table class="tf-table">'
+                f'<thead><tr>'
+                f'<th>Team Member</th>'
+                f'<th style="text-align:center">Total</th>'
+                f'<th style="text-align:center">Pending</th>'
+                f'<th style="text-align:center">Overdue</th>'
+                f'<th style="text-align:center">Done On Time</th>'
+                f'<th style="text-align:center">Done Late</th>'
+                f'<th>On-Time Rate</th>'
+                f'</tr></thead>'
+                f'<tbody>{rows_html}</tbody>'
+                f'</table>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.info("No tasks assigned yet.")
+
+    # ── Upcoming / Recent tasks preview ──────────────────────────────────────
+    elif filtered:
+        pending_tasks = [t for t in filtered if classify(t) in ("pending", "overdue")]
+        pending_tasks.sort(key=lambda t: str(t.get("Deadline", "")))
+
+        if pending_tasks:
+            st.markdown(f"#### Upcoming Tasks ({len(pending_tasks)})")
+            for t in pending_tasks[:5]:
+                cls    = classify(t)
+                owner_label = (f' · <span style="color:#64748B">→ {t.get("AssignedToName","")}</span>'
+                               if is_admin else "")
+                st.markdown(
+                    f'<div class="tf-card tf-card-{cls}" style="margin-bottom:8px">'
+                    f'<div class="tf-card-top">'
+                    f'<span class="tf-card-title">{t.get("Title","")}</span>'
+                    f'<span class="tf-pill tf-pill-{cls}">{cls}</span>'
+                    f'</div>'
+                    f'<div class="tf-meta">🕐 {fmt_date(str(t.get("Deadline","")))} {owner_label}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            if len(pending_tasks) > 5:
+                st.caption(f"+ {len(pending_tasks) - 5} more — see the Tasks tab for the full list.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -543,88 +543,85 @@ if not st.session_state.logged_in:
 
             step = st.session_state.login_step
 
-            # ── STEP 1: select email ──────────────────────────────────────────
+            # ── STEP 1: select email  (Enter = Continue) ──────────────────────
             if step == "select":
-                sel = st.selectbox(
-                    "Your email",
-                    ["— Select your email —"] + emails,
-                    label_visibility="collapsed",
-                )
-                if st.button("Continue →", type="primary", use_container_width=True):
+                with st.form("login_select_form"):
+                    sel  = st.selectbox(
+                        "Your email",
+                        ["— Select your email —"] + emails,
+                        label_visibility="collapsed",
+                    )
+                    cont = st.form_submit_button(
+                        "Continue →", type="primary", use_container_width=True
+                    )
+                if cont:
                     if sel == "— Select your email —":
                         st.error("Please select your email.")
                     else:
                         st.session_state.login_email = sel
-                        stored = get_pw_hash(sel)
-                        st.session_state.login_step = "set_password" if not stored else "password"
+                        st.session_state.login_step  = "set_password" if not get_pw_hash(sel) else "password"
                         st.rerun()
 
-            # ── STEP 2a: password not set — create one ────────────────────────
+            # ── STEP 2a: first login — set password  (Enter = submit) ─────────
             elif step == "set_password":
                 pending = st.session_state.login_email
-                st.markdown(
-                    f'<div class="tf-who">👤 {pending}</div>',
-                    unsafe_allow_html=True,
-                )
+                st.markdown(f'<div class="tf-who">👤 {pending}</div>', unsafe_allow_html=True)
                 st.info("First sign in — please create your password for TaskFlow.")
-                pw1 = st.text_input("New password",     type="password", key="sp1",
-                                    placeholder="At least 6 characters")
-                pw2 = st.text_input("Confirm password", type="password", key="sp2",
-                                    placeholder="Repeat the password")
-                col_btn, col_back = st.columns([3, 1])
-                with col_btn:
-                    if st.button("Set Password & Sign In", type="primary", use_container_width=True):
-                        if len(pw1) < 6:
-                            st.error("Password must be at least 6 characters.")
-                        elif pw1 != pw2:
-                            st.error("Passwords do not match.")
-                        else:
-                            with st.spinner("Saving password…"):
-                                set_pw(pending, pw1)
-                            # Session check (owner skips)
-                            if pending != OWNER_EMAIL:
-                                active, old_tok = check_session(pending)
-                                if active and old_tok != MY_TOKEN:
-                                    st.session_state.login_step = "conflict"
-                                    st.rerun()
-                            write_session(pending, MY_TOKEN)
-                            _finish_login(pending, users)
-                with col_back:
-                    if st.button("← Back", use_container_width=True):
-                        st.session_state.login_step  = "select"
-                        st.session_state.login_email = ""
-                        st.rerun()
+                with st.form("set_pw_form"):
+                    pw1  = st.text_input("New password",     type="password",
+                                         placeholder="At least 6 characters")
+                    pw2  = st.text_input("Confirm password", type="password",
+                                         placeholder="Repeat the password")
+                    save = st.form_submit_button(
+                        "Set Password & Sign In", type="primary", use_container_width=True
+                    )
+                if st.button("← Back", key="back_spw", use_container_width=True):
+                    st.session_state.login_step  = "select"
+                    st.session_state.login_email = ""
+                    st.rerun()
+                if save:
+                    if len(pw1) < 6:
+                        st.error("Password must be at least 6 characters.")
+                    elif pw1 != pw2:
+                        st.error("Passwords do not match.")
+                    else:
+                        with st.spinner("Saving password…"):
+                            set_pw(pending, pw1)
+                        if pending != OWNER_EMAIL:
+                            active, old_tok = check_session(pending)
+                            if active and old_tok != MY_TOKEN:
+                                st.session_state.login_step = "conflict"
+                                st.rerun()
+                        write_session(pending, MY_TOKEN)
+                        _finish_login(pending, users)
 
-            # ── STEP 2b: password set — verify ───────────────────────────────
+            # ── STEP 2b: returning login — verify password  (Enter = Sign In) ─
             elif step == "password":
                 pending = st.session_state.login_email
-                st.markdown(
-                    f'<div class="tf-who">👤 {pending}</div>',
-                    unsafe_allow_html=True,
-                )
-                pw = st.text_input("Password", type="password", key="lp",
-                                   placeholder="Enter your TaskFlow password")
-                col_btn, col_back = st.columns([3, 1])
-                with col_btn:
-                    if st.button("Sign In", type="primary", use_container_width=True):
-                        if not pw:
-                            st.error("Please enter your password.")
-                        elif not verify_pw(pending, pw):
-                            st.error("Incorrect password. Please try again.")
-                        else:
-                            # Session check (owner skips)
-                            if pending != OWNER_EMAIL:
-                                active, old_tok = check_session(pending)
-                                if active and old_tok != MY_TOKEN:
-                                    st.session_state.login_step = "conflict"
-                                    st.rerun()
-                            write_session(pending, MY_TOKEN)
-                            _finish_login(pending, users)
-                with col_back:
-                    if st.button("← Back", use_container_width=True):
-                        st.session_state.login_step  = "select"
-                        st.session_state.login_email = ""
-                        st.rerun()
+                st.markdown(f'<div class="tf-who">👤 {pending}</div>', unsafe_allow_html=True)
+                with st.form("login_pw_form"):
+                    pw   = st.text_input("Password", type="password",
+                                         placeholder="Enter your TaskFlow password")
+                    sign = st.form_submit_button(
+                        "Sign In", type="primary", use_container_width=True
+                    )
+                if st.button("← Back", key="back_pw", use_container_width=True):
+                    st.session_state.login_step  = "select"
+                    st.session_state.login_email = ""
+                    st.rerun()
+                if sign:
+                    if not pw:
+                        st.error("Please enter your password.")
+                    elif not verify_pw(pending, pw):
+                        st.error("Incorrect password. Please try again.")
+                    else:
+                        if pending != OWNER_EMAIL:
+                            active, old_tok = check_session(pending)
+                            if active and old_tok != MY_TOKEN:
+                                st.session_state.login_step = "conflict"
+                                st.rerun()
+                        write_session(pending, MY_TOKEN)
+                        _finish_login(pending, users)
 
             # ── STEP 3: session conflict ──────────────────────────────────────
             elif step == "conflict":
@@ -891,14 +888,16 @@ if tab_assign is not None:
         st.error(f"Could not load team members: {e}")
         users, email_name, email_list = [], {}, []
 
-    with st.form("assign_form", clear_on_submit=True, border=False):
-        c1, c2 = st.columns(2)
-        with c1:
-            to_email = st.selectbox("Assign to (email) *", ["— Select —"] + email_list)
-        with c2:
-            st.text_input("Assignee name", value=email_name.get(to_email, ""),
-                          disabled=True, help="Auto-filled from email")
+    # Email + name OUTSIDE the form so the name updates immediately on selection
+    c1, c2 = st.columns(2)
+    with c1:
+        to_email = st.selectbox("Assign to (email) *", ["— Select —"] + email_list,
+                                key="assign_to_email")
+    with c2:
+        st.text_input("Assignee name", value=email_name.get(to_email, ""),
+                      disabled=True, help="Auto-filled from email")
 
+    with st.form("assign_form", clear_on_submit=True, border=False):
         title = st.text_input("Task title *", placeholder="Brief, clear title for this task")
         desc  = st.text_area("Description",
                              placeholder="Describe the task — steps, context, acceptance criteria…",

@@ -7,7 +7,7 @@ Roles: owner > admin > user  |  Password auth  |  One active session per account
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, time, timedelta
 import uuid, base64, threading, hashlib
 from io import BytesIO
 
@@ -425,48 +425,59 @@ def decode_photo(b64: str):
 
 
 # ── TASK UTILS ─────────────────────────────────────────────────────────────────
+def _parse_deadline(s: str):
+    """Parse 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM' into a datetime, or None."""
+    s = str(s).strip()
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
+
+
 def classify(task: dict) -> str:
     if str(task.get("Status", "")).lower() == "completed":
         return "completed"
-    try:
-        if datetime.strptime(str(task["Deadline"]), "%Y-%m-%d").date() < date.today():
-            return "overdue"
-    except Exception:
-        pass
+    dt = _parse_deadline(str(task.get("Deadline", "")))
+    if dt and dt < datetime.now():
+        return "overdue"
     return "pending"
 
 
 def fmt_date(s: str) -> str:
-    try:
-        return datetime.strptime(str(s), "%Y-%m-%d").strftime("%d %b %Y")
-    except Exception:
+    dt = _parse_deadline(str(s))
+    if dt is None:
         return str(s)
+    if dt.hour == 0 and dt.minute == 0:
+        return dt.strftime("%d %b %Y")
+    return dt.strftime("%d %b %Y, %I:%M %p")
 
 
 def compute_stats(tasks: list[dict]) -> dict:
-    today = date.today()
+    now = datetime.now()
     pending = overdue = done_on_time = done_late = 0
     for t in tasks:
         status = str(t.get("Status", "")).lower()
         dl_str = str(t.get("Deadline", ""))
         ca_str = str(t.get("CompletedAt", "")).strip()
         if status == "completed":
-            try:
-                dl = datetime.strptime(dl_str, "%Y-%m-%d").date()
-                ca = datetime.fromisoformat(ca_str).date() if ca_str else None
-                if ca is None or ca <= dl:
-                    done_on_time += 1
-                else:
-                    done_late += 1
-            except Exception:
+            dl = _parse_deadline(dl_str)
+            ca = None
+            if ca_str:
+                try:
+                    ca = datetime.fromisoformat(ca_str)
+                except Exception:
+                    pass
+            if dl is None or ca is None or ca <= dl:
                 done_on_time += 1
+            else:
+                done_late += 1
         else:
-            try:
-                if datetime.strptime(dl_str, "%Y-%m-%d").date() < today:
-                    overdue += 1
-                else:
-                    pending += 1
-            except Exception:
+            dt = _parse_deadline(dl_str)
+            if dt and dt < now:
+                overdue += 1
+            else:
                 pending += 1
     return {
         "total":        len(tasks),
@@ -476,6 +487,71 @@ def compute_stats(tasks: list[dict]) -> dict:
         "done_late":    done_late,
         "done_total":   done_on_time + done_late,
     }
+
+
+# ── TASK DETAIL DIALOG ─────────────────────────────────────────────────────────
+@st.dialog("Task Details", width="large")
+def task_detail_dialog(task: dict, can_complete: bool, can_delete: bool):
+    tid  = str(task.get("ID", ""))
+    cls  = classify(task)
+    done = cls == "completed"
+
+    strike = "text-decoration:line-through;color:#94A3B8;" if done else ""
+    st.markdown(
+        f'<span class="tf-pill tf-pill-{cls}" style="font-size:12px;padding:4px 14px">'
+        f'{cls.upper()}</span>'
+        f'<h2 style="margin:12px 0 20px;font-size:20px;{strike}">'
+        f'{task.get("Title","")}</h2>',
+        unsafe_allow_html=True,
+    )
+
+    mc1, mc2 = st.columns(2)
+    with mc1:
+        assignee = task.get("AssignedToName") or task.get("AssignedTo", "")
+        st.markdown(f"**👤 Assigned to**  \n{assignee}")
+        st.markdown(f"**📤 Assigned by**  \n{task.get('AssignedByName', '')}")
+    with mc2:
+        st.markdown(f"**🕐 Deadline**  \n{fmt_date(str(task.get('Deadline', '')))}")
+        st.markdown(f"**📅 Assigned on**  \n{str(task.get('CreatedAt', ''))[:10]}")
+
+    if done:
+        done_at = str(task.get("CompletedAt", ""))[:10]
+        st.success(f"✅ Completed{' on ' + done_at if done_at else ''}")
+
+    if task.get("Description"):
+        st.divider()
+        st.markdown("**📝 Description**")
+        st.markdown(task["Description"])
+
+    if task.get("Photo"):
+        st.divider()
+        img_data = decode_photo(task["Photo"])
+        if img_data:
+            st.image(img_data, use_container_width=True)
+
+    btns = []
+    if can_complete and not done:
+        btns.append("complete")
+    if can_delete:
+        btns.append("delete")
+
+    if btns:
+        st.divider()
+        b_cols = st.columns(len(btns))
+        for i, action in enumerate(btns):
+            with b_cols[i]:
+                if action == "complete":
+                    if st.button("✅ Mark Complete", key=f"dlg_done_{tid}",
+                                 type="primary", use_container_width=True):
+                        with st.spinner("Updating…"):
+                            finish_task(tid)
+                        st.rerun()
+                elif action == "delete":
+                    if st.button("🗑️ Delete Task", key=f"dlg_del_{tid}",
+                                 use_container_width=True):
+                        with st.spinner("Deleting…"):
+                            delete_task(tid)
+                        st.rerun()
 
 
 # ── STREAMLIT SESSION DEFAULTS ─────────────────────────────────────────────────
@@ -902,11 +978,15 @@ if tab_assign is not None:
         desc  = st.text_area("Description",
                              placeholder="Describe the task — steps, context, acceptance criteria…",
                              height=130)
-        c3, _ = st.columns(2)
+        c3, c4 = st.columns(2)
         with c3:
-            deadline = st.date_input("Deadline *",
-                                     value=date.today() + timedelta(days=3),
-                                     min_value=date.today(), format="DD/MM/YYYY")
+            deadline_date = st.date_input("Deadline date *",
+                                          value=date.today() + timedelta(days=3),
+                                          min_value=date.today(), format="DD/MM/YYYY")
+        with c4:
+            deadline_time = st.time_input("Deadline time *",
+                                          value=time(18, 0),
+                                          step=timedelta(minutes=15))
         photo = st.file_uploader("Reference photo (optional)", type=["jpg", "jpeg", "png", "gif"])
         if photo:
             st.image(photo, caption="Preview", use_container_width=True)
@@ -928,7 +1008,7 @@ if tab_assign is not None:
                         str(uuid.uuid4())[:8], title.strip(), desc.strip(),
                         to_email, email_name.get(to_email, ""),
                         st.session_state.user_email, st.session_state.user_name,
-                        str(deadline), "pending",
+                        f"{deadline_date} {deadline_time.strftime('%H:%M')}", "pending",
                         datetime.now().isoformat(timespec="seconds"), "",
                         photo_b64,
                     ])
@@ -999,6 +1079,7 @@ with tab_view:
                 title_cls = "done" if done else ""
                 dl_str    = fmt_date(str(task.get("Deadline", "")))
                 cr_str    = str(task.get("CreatedAt", ""))[:10]
+                photo_badge = "&nbsp;·&nbsp; 📷" if task.get("Photo") else ""
                 desc_html = (f'<div class="tf-desc">{task["Description"]}</div>'
                              if task.get("Description") else "")
                 assignee_html = (
@@ -1016,16 +1097,11 @@ with tab_view:
                   <div class="tf-meta">
                     🕐 Deadline: <strong>{dl_str}</strong> &nbsp;·&nbsp;
                     📤 From: {task.get('AssignedByName','')} &nbsp;·&nbsp;
-                    📅 Assigned: {cr_str}
+                    📅 Assigned: {cr_str}{photo_badge}
                   </div>
                   {desc_html}
                 </div>
                 """, unsafe_allow_html=True)
-
-                if task.get("Photo"):
-                    img_data = decode_photo(task["Photo"])
-                    if img_data:
-                        st.image(img_data, use_container_width=True)
 
                 confirm_key = f"del_confirm_{tid}"
 
@@ -1046,7 +1122,10 @@ with tab_view:
 
                 elif not done:
                     if is_admin:
-                        _, done_col, del_col = st.columns([2, 2, 1])
+                        open_col, done_col, del_col = st.columns([2, 2, 1])
+                        with open_col:
+                            if st.button("📂 Open", key=f"open_{tid}", use_container_width=True):
+                                task_detail_dialog(task, can_complete=True, can_delete=True)
                         with done_col:
                             if st.button("✅ Mark Complete", key=f"done_{tid}",
                                          type="primary", use_container_width=True):
@@ -1060,7 +1139,10 @@ with tab_view:
                                 st.session_state[confirm_key] = True
                                 st.rerun()
                     else:
-                        _, btn_col = st.columns([3, 1])
+                        open_col, btn_col = st.columns([1, 1])
+                        with open_col:
+                            if st.button("📂 Open", key=f"open_{tid}", use_container_width=True):
+                                task_detail_dialog(task, can_complete=True, can_delete=False)
                         with btn_col:
                             if st.button("✅ Mark Complete", key=f"done_{tid}",
                                          type="primary", use_container_width=True):
@@ -1071,12 +1153,18 @@ with tab_view:
                 else:
                     done_at = str(task.get("CompletedAt", ""))[:10]
                     if is_admin:
-                        _, del_col = st.columns([4, 1])
+                        open_col, del_col = st.columns([4, 1])
+                        with open_col:
+                            if st.button("📂 Open", key=f"open_{tid}", use_container_width=True):
+                                task_detail_dialog(task, can_complete=False, can_delete=True)
                         with del_col:
                             if st.button("🗑️", key=f"del_{tid}",
                                          use_container_width=True, help="Delete task"):
                                 st.session_state[confirm_key] = True
                                 st.rerun()
+                    else:
+                        if st.button("📂 Open", key=f"open_{tid}", use_container_width=True):
+                            task_detail_dialog(task, can_complete=False, can_delete=False)
                     st.caption(f"✓ Completed{' · ' + done_at if done_at else ''}")
 
                 st.write("")

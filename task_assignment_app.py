@@ -130,6 +130,32 @@ div[data-testid="stHorizontalBlock"] .stRadio > label { display:none; }
 """, unsafe_allow_html=True)
 
 
+# ── WATERMARK ─────────────────────────────────────────────────────────────────
+# Tiled "NK" at 4 % opacity — invisible at normal zoom, legible when zoomed in.
+st.markdown("""
+<style>
+.nk-wm {
+    position: fixed; top: 0; left: 0;
+    width: 100vw; height: 100vh;
+    pointer-events: none; z-index: 9999; overflow: hidden;
+}
+</style>
+<div class="nk-wm">
+  <svg width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <pattern id="nkpat" x="0" y="0" width="160" height="160"
+               patternUnits="userSpaceOnUse">
+        <text x="80" y="80" transform="rotate(-45 80 80)"
+              text-anchor="middle" dominant-baseline="middle"
+              font-family="Arial, sans-serif" font-size="22" font-weight="bold"
+              letter-spacing="4" fill="rgba(0,0,0,0.04)">NK</text>
+      </pattern>
+    </defs>
+    <rect width="100%" height="100%" fill="url(#nkpat)"/>
+  </svg>
+</div>
+""", unsafe_allow_html=True)
+
 # ── BROWSER-SESSION TOKEN ──────────────────────────────────────────────────────
 if "session_token" not in st.session_state:
     st.session_state.session_token = str(uuid.uuid4())

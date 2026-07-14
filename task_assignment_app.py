@@ -1201,7 +1201,24 @@ with tab_view:
 # ══════════════════════════════════════════════════════════════════════════════
 if is_owner and tab_manage is not None:
     with tab_manage:
-        st.subheader("Manage Users", divider="blue")
+        try:
+            _sheet_url = (
+                f"https://docs.google.com/spreadsheets/d/"
+                f"{st.secrets['spreadsheet_id']}/edit"
+            )
+        except Exception:
+            _sheet_url = "#"
+        st.markdown(
+            f'<div style="display:flex;justify-content:space-between;align-items:center;'
+            f'padding-bottom:8px;border-bottom:2px solid #2563EB;margin-bottom:16px">'
+            f'<span style="font-size:1.4rem;font-weight:600;color:#0F172A">Manage Users</span>'
+            f'<a href="{_sheet_url}" target="_blank" title="Open linked Google Sheet" '
+            f'style="text-decoration:none;font-size:18px;color:#10B981;'
+            f'background:#ECFDF5;border-radius:8px;padding:4px 12px;'
+            f'border:1.5px solid #D1FAE5;line-height:1.6">🔗</a>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
         mu1, mu2 = st.tabs(["👥  Users & Roles", "🔌  Active Sessions"])
 
